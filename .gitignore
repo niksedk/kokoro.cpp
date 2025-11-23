@@ -3,7 +3,7 @@ build/
 bin/
 lib/
 out/
-
+models/
 # C++ compiled files
 *.o
 *.obj
