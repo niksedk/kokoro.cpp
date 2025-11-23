@@ -1,7 +1,6 @@
 # Build directories
 build/
 bin/
-lib/
 out/
 models/
 # C++ compiled files
