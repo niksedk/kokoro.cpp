@@ -51,7 +51,7 @@ cmake --build build
 ./build/kokoro_demo models/kokoro-v1.1-zh.onnx models/voices-v1.1-zh.bin "你好啊，这是一个测试。Hello world"
 ```
 
-输出的音频将保存为当前目录下的 `output.wav`。
+因为依赖相关词典，需要在项目根目录运行！ 输出的音频将保存为当前目录下的 `output.wav`。
 
 ## 项目结构
 
