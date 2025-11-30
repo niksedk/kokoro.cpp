@@ -2,6 +2,11 @@
 #include <iostream>
 #include <vector>
 #include <fstream>
+#include <iomanip>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 void save_audio(const std::string& filename, const std::vector<float>& audio, int sample_rate) {
     // Simple WAV header writing
@@ -11,7 +16,7 @@ void save_audio(const std::string& filename, const std::vector<float>& audio, in
     int bits_per_sample = 32; // Float
     int byte_rate = sample_rate * channels * bits_per_sample / 8;
     int block_align = channels * bits_per_sample / 8;
-    int data_size = audio.size() * sizeof(float);
+    int data_size = static_cast<int>(audio.size() * sizeof(float));
     int chunk_size = 36 + data_size;
 
     file.write("RIFF", 4);
@@ -41,6 +46,18 @@ void save_audio(const std::string& filename, const std::vector<float>& audio, in
 }
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+    // 设置控制台代码页为UTF-8
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+    
+    // 打印命令行参数
+    std::cout << "Command line arguments:" << std::endl;
+    for (int i = 0; i < argc; i++) {
+        std::cout << "  argv[" << i << "]: '" << argv[i] << "'" << std::endl;
+    }
+#endif
+
     if (argc < 4) {
         std::cerr << "Usage: " << argv[0] << " <model_path> <voices.bin> <text> [vocab_path]" << std::endl;
         return 1;
@@ -49,6 +66,36 @@ int main(int argc, char** argv) {
     std::string model_path = argv[1];
     std::string voices_path = argv[2];
     std::string text = argv[3];
+    
+#ifdef _WIN32
+    // 将ANSI编码的文本转换为UTF-8
+    std::string utf8_text;
+    
+    // 首先将ANSI转换为Unicode (UTF-16)
+    int wstr_len = MultiByteToWideChar(CP_ACP, 0, text.c_str(), -1, NULL, 0);
+    if (wstr_len > 0) {
+        std::wstring wstr(wstr_len, 0);
+        MultiByteToWideChar(CP_ACP, 0, text.c_str(), -1, &wstr[0], wstr_len);
+        
+        // 然后将Unicode (UTF-16)转换为UTF-8
+        int utf8_len = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, NULL, 0, NULL, NULL);
+        if (utf8_len > 0) {
+            utf8_text.resize(utf8_len);
+            WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, &utf8_text[0], utf8_len, NULL, NULL);
+            utf8_text.resize(utf8_len - 1);  // 移除结尾的\0
+    
+            std::cout << "Converted text hex: " << utf8_text << std::endl;
+       
+            // 使用转换后的UTF-8文本
+            text = utf8_text;
+        } else {
+            std::cerr << "Failed to convert from UTF-16 to UTF-8" << std::endl;
+        }
+    } else {
+        std::cerr << "Failed to convert from ANSI to UTF-16" << std::endl;
+    }
+#endif
+    
     std::string vocab_path = "dict/vocab.txt";
     if (argc > 4) {
         vocab_path = argv[4];
@@ -57,7 +104,7 @@ int main(int argc, char** argv) {
     try {
         Kokoro tts(model_path, voices_path, vocab_path);
         
-        auto voice = tts.get_voice_style("zf_001"); // Default voice
+        auto voice = tts.get_voice_style("zf_002"); // Default voice
         auto result = tts.create(text, voice, 1.0f);
         
         save_audio("output.wav", result.first, result.second);

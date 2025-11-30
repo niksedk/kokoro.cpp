@@ -33,8 +33,8 @@
 
 ```bash
 mkdir build
-cmake -B build .
-cmake --build build
+cmake -B build  -S .
+cmake --build build --config Release
 ```
 
 ## 使用方法

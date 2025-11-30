@@ -23,7 +23,12 @@ Kokoro::Kokoro(const std::string& model_path, const std::string& voices_path, co
     session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
     // Load model
+#ifdef _WIN32
+    std::wstring wmodel_path(model_path.begin(), model_path.end());
+    session_ = Ort::Session(env_, wmodel_path.c_str(), session_options);
+#else
     session_ = Ort::Session(env_, model_path.c_str(), session_options);
+#endif
 
     // Load voices
     load_voices(voices_path);
