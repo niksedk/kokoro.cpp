@@ -182,37 +182,50 @@ endif()
 add_executable(kokoro_demo kokoro_main.cpp)
 target_link_libraries(kokoro_demo kokoro_core)
 
+# kokoro-tts-server: HTTP API server, mirrors the qwen3-tts-server endpoint shape
+# (/health, /v1/capabilities, /v1/speakers, /v1/synthesize). Single-header httplib
+# and nlohmann/json are vendored under third_party/.
+add_executable(kokoro-tts-server
+    server/server_main.cpp
+    server/wav_memory.cpp
+)
+target_include_directories(kokoro-tts-server PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/server
+    ${CMAKE_SOURCE_DIR}/third_party
+)
+target_link_libraries(kokoro-tts-server kokoro_core)
+
 if (ONNXRUNTIME_LIB)
     target_link_libraries(kokoro_demo ${ONNXRUNTIME_LIB})
-    
+    target_link_libraries(kokoro-tts-server ${ONNXRUNTIME_LIB})
+
     # 添加额外的系统库
     if (APPLE)
         target_link_libraries(kokoro_demo "-framework Foundation" "-framework CoreFoundation")
+        target_link_libraries(kokoro-tts-server "-framework Foundation" "-framework CoreFoundation")
     endif()
-    
+
     # Windows特殊处理
     if (MSVC)
-        # 添加必要的Windows系统库
-        target_link_libraries(kokoro_demo "Advapi32.lib")
-        target_link_libraries(kokoro_demo "Ws2_32.lib")
-        target_link_libraries(kokoro_demo "Shlwapi.lib")
-        target_link_libraries(kokoro_demo "userenv.lib")
-        
-        # 添加标准库支持
-        target_link_libraries(kokoro_demo "Synchronization.lib")
-        
-        # 添加安全检查支持
-        target_link_libraries(kokoro_demo "bufferoverflowu.lib")
-        
-        # 添加链接器选项
-        target_link_options(kokoro_demo PRIVATE "/IGNORE:4099" "/FORCE:MULTIPLE")
+        foreach(_t kokoro_demo kokoro-tts-server)
+            target_link_libraries(${_t} "Advapi32.lib")
+            target_link_libraries(${_t} "Ws2_32.lib")
+            target_link_libraries(${_t} "Shlwapi.lib")
+            target_link_libraries(${_t} "userenv.lib")
+            target_link_libraries(${_t} "Synchronization.lib")
+            target_link_libraries(${_t} "bufferoverflowu.lib")
+            target_link_options(${_t} PRIVATE "/IGNORE:4099" "/FORCE:MULTIPLE")
+        endforeach()
     endif()
-    
+
     # Add rpath to find the dylib at runtime
     if (APPLE)
-        set_target_properties(kokoro_demo PROPERTIES INSTALL_RPATH "@loader_path/../third_party/onnxruntime/lib/mac_arm64")
+        set_target_properties(kokoro_demo         PROPERTIES INSTALL_RPATH "@loader_path/../third_party/onnxruntime/lib/mac_arm64")
+        set_target_properties(kokoro-tts-server   PROPERTIES INSTALL_RPATH "@loader_path/../third_party/onnxruntime/lib/mac_arm64")
     elseif (UNIX)
-        set_target_properties(kokoro_demo PROPERTIES INSTALL_RPATH "$ORIGIN/../third_party/onnxruntime/lib/linux_x64")
+        set_target_properties(kokoro_demo         PROPERTIES INSTALL_RPATH "$ORIGIN/../third_party/onnxruntime/lib/linux_x64")
+        set_target_properties(kokoro-tts-server   PROPERTIES INSTALL_RPATH "$ORIGIN/../third_party/onnxruntime/lib/linux_x64")
     endif()
 endif()
 

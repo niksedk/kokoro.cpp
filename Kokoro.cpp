@@ -123,6 +123,19 @@ std::vector<float> Kokoro::get_voice_style(const std::string& name) {
     return std::vector<float>(256, 0.0f);
 }
 
+std::vector<std::string> Kokoro::get_voice_names() const {
+    std::vector<std::string> names;
+    names.reserve(voices_.size());
+    for (const auto& kv : voices_) {
+        names.push_back(kv.first);
+    }
+    return names;
+}
+
+bool Kokoro::has_voice(const std::string& name) const {
+    return voices_.find(name) != voices_.end();
+}
+
 std::vector<std::string> Kokoro::_split_phonemes(const std::string& phonemes) {
     std::vector<std::string> batches;
     std::regex re("([.,!?;])");
