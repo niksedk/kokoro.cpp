@@ -1,0 +1,300 @@
+name: Build and release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release tag (e.g. v0.1.0). Leave empty to only upload zips as workflow artifacts without creating a release.'
+        required: false
+        type: string
+
+# Pin a single ONNX Runtime version for all three platforms so the resulting
+# binaries are ABI-consistent and reproducible. Bump together when upgrading.
+env:
+  ONNXRUNTIME_VERSION: 1.20.1
+
+jobs:
+  windows-cpu:
+    name: Windows x64 (CPU)
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Download ONNX Runtime (Windows x64)
+        shell: pwsh
+        run: |
+          $ver = "${{ env.ONNXRUNTIME_VERSION }}"
+          $url = "https://github.com/microsoft/onnxruntime/releases/download/v$ver/onnxruntime-win-x64-$ver.zip"
+          Write-Host "Downloading $url"
+          Invoke-WebRequest -Uri $url -OutFile onnxruntime.zip
+          Expand-Archive -Path onnxruntime.zip -DestinationPath . -Force
+          $extracted = Resolve-Path "onnxruntime-win-x64-$ver"
+          "ONNXRUNTIME_ROOT=$extracted" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Get-ChildItem -Recurse $extracted | Select-Object -First 10 FullName
+
+      - name: Configure (static MSVC runtime)
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+            -DONNXRUNTIME_ROOT="$env:ONNXRUNTIME_ROOT" `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+
+      - name: Build kokoro-tts-server (Release)
+        shell: pwsh
+        run: cmake --build build --target kokoro-tts-server --config Release --parallel
+
+      - name: Stage artifacts
+        shell: pwsh
+        run: |
+          $stage = "dist/kokoro-tts-server-windows-x64"
+          New-Item -ItemType Directory -Force -Path $stage      | Out-Null
+          New-Item -ItemType Directory -Force -Path "$stage/dict" | Out-Null
+          Copy-Item build/Release/kokoro-tts-server.exe $stage
+          Copy-Item "$env:ONNXRUNTIME_ROOT/lib/onnxruntime.dll" $stage
+          Copy-Item -Recurse dict/* "$stage/dict/"
+          Copy-Item README.md $stage
+          Write-Host "Staged files (top-level):"
+          Get-ChildItem $stage | Format-Table Name, Length -AutoSize
+
+      - name: Determine archive name
+        id: name
+        shell: pwsh
+        run: |
+          $ver = if ($env:GITHUB_REF -like "refs/tags/*") {
+            ($env:GITHUB_REF -replace "refs/tags/", "").Trim()
+          } elseif ("${{ inputs.version }}") {
+            "${{ inputs.version }}".Trim()
+          } else {
+            "dev-$(git rev-parse --short HEAD)"
+          }
+          $zip = "kokoro-tts-server-$ver-windows-x64.zip"
+          "zip=$zip"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Archive
+        shell: pwsh
+        run: |
+          $zip = "${{ steps.name.outputs.zip }}"
+          Compress-Archive -Path "dist/kokoro-tts-server-windows-x64/*" -DestinationPath $zip -Force
+          Write-Host "Created $zip ($([int]((Get-Item $zip).Length / 1MB)) MB)"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kokoro-tts-server-windows-x64
+          path: ${{ steps.name.outputs.zip }}
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.version
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.name.outputs.version }}
+          name: ${{ steps.name.outputs.version }}
+          files: ${{ steps.name.outputs.zip }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(steps.name.outputs.version, '-') }}
+
+  linux-cpu:
+    name: Linux x64 (CPU)
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            ninja-build \
+            zip
+
+      - name: Download ONNX Runtime (Linux x64)
+        run: |
+          ver="${{ env.ONNXRUNTIME_VERSION }}"
+          url="https://github.com/microsoft/onnxruntime/releases/download/v$ver/onnxruntime-linux-x64-$ver.tgz"
+          echo "Downloading $url"
+          curl -L --fail "$url" -o onnxruntime.tgz
+          tar -xzf onnxruntime.tgz
+          extracted="$PWD/onnxruntime-linux-x64-$ver"
+          echo "ONNXRUNTIME_ROOT=$extracted" >> "$GITHUB_ENV"
+          ls -la "$extracted/lib" | head -10
+
+      - name: Configure ($ORIGIN rpath, static stdlibc++)
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DONNXRUNTIME_ROOT="$ONNXRUNTIME_ROOT" \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_EXE_LINKER_FLAGS='-static-libstdc++ -static-libgcc'
+
+      - name: Build kokoro-tts-server
+        run: cmake --build build --target kokoro-tts-server --parallel
+
+      - name: Stage artifacts
+        run: |
+          stage="dist/kokoro-tts-server-linux-x64"
+          mkdir -p "$stage/dict"
+          exe=$(find build -name kokoro-tts-server -type f -executable | head -n 1)
+          if [ -z "$exe" ]; then echo "kokoro-tts-server not found" >&2; exit 1; fi
+          cp "$exe" "$stage/"
+          # Copy ONNX Runtime shared libs (versioned + symlinks)
+          find "$ONNXRUNTIME_ROOT/lib" -name 'libonnxruntime.so*' \( -type f -o -type l \) -exec cp -a {} "$stage/" \;
+          cp -R dict/. "$stage/dict/"
+          cp README.md "$stage/"
+          echo "Staged files:"
+          ls -la "$stage"
+          echo "ldd report:"
+          ldd "$stage/kokoro-tts-server" || true
+
+      - name: Determine archive name
+        id: name
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            ver="${GITHUB_REF#refs/tags/}"
+          elif [ -n "${{ inputs.version }}" ]; then
+            ver="${{ inputs.version }}"
+          else
+            ver="dev-$(git rev-parse --short HEAD)"
+          fi
+          ver="$(printf '%s' "$ver" | tr -d '[:space:]')"
+          archive="kokoro-tts-server-$ver-linux-x64.zip"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Archive
+        run: |
+          # Flat zip (files at root, matching the Windows zip layout) with Unix perms preserved.
+          ( cd dist/kokoro-tts-server-linux-x64 && \
+            zip -r "$GITHUB_WORKSPACE/${{ steps.name.outputs.archive }}" . )
+          ls -la "${{ steps.name.outputs.archive }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kokoro-tts-server-linux-x64
+          path: ${{ steps.name.outputs.archive }}
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.version
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.name.outputs.version }}
+          name: ${{ steps.name.outputs.version }}
+          files: ${{ steps.name.outputs.archive }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(steps.name.outputs.version, '-') }}
+
+  macos-arm64:
+    name: macOS ARM64 (CPU)
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build deps
+        run: |
+          brew update
+          brew install ninja
+
+      - name: Download ONNX Runtime (macOS arm64)
+        run: |
+          ver="${{ env.ONNXRUNTIME_VERSION }}"
+          url="https://github.com/microsoft/onnxruntime/releases/download/v$ver/onnxruntime-osx-arm64-$ver.tgz"
+          echo "Downloading $url"
+          curl -L --fail "$url" -o onnxruntime.tgz
+          tar -xzf onnxruntime.tgz
+          extracted="$PWD/onnxruntime-osx-arm64-$ver"
+          echo "ONNXRUNTIME_ROOT=$extracted" >> "$GITHUB_ENV"
+          ls -la "$extracted/lib" | head -10
+
+      - name: Configure (@loader_path rpath)
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DONNXRUNTIME_ROOT="$ONNXRUNTIME_ROOT" \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DCMAKE_INSTALL_RPATH='@loader_path'
+
+      - name: Build kokoro-tts-server
+        run: cmake --build build --target kokoro-tts-server --parallel
+
+      - name: Stage artifacts
+        run: |
+          stage="dist/kokoro-tts-server-macos-arm64"
+          mkdir -p "$stage/dict"
+          exe=$(find build -name kokoro-tts-server -type f -perm +111 | head -n 1)
+          if [ -z "$exe" ]; then echo "kokoro-tts-server not found" >&2; exit 1; fi
+          cp "$exe" "$stage/"
+          # Copy ONNX Runtime shared libs (versioned + symlinks)
+          find "$ONNXRUNTIME_ROOT/lib" -name 'libonnxruntime*.dylib' \( -type f -o -type l \) -exec cp -a {} "$stage/" \;
+          cp -R dict/ "$stage/dict/"
+          cp README.md "$stage/"
+          echo "Staged files:"
+          ls -la "$stage"
+          echo "otool report:"
+          otool -L "$stage/kokoro-tts-server" || true
+
+      - name: Determine archive name
+        id: name
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            ver="${GITHUB_REF#refs/tags/}"
+          elif [ -n "${{ inputs.version }}" ]; then
+            ver="${{ inputs.version }}"
+          else
+            ver="dev-$(git rev-parse --short HEAD)"
+          fi
+          ver="$(printf '%s' "$ver" | tr -d '[:space:]')"
+          archive="kokoro-tts-server-$ver-macos-arm64.zip"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Archive
+        run: |
+          ( cd dist/kokoro-tts-server-macos-arm64 && \
+            zip -r "$GITHUB_WORKSPACE/${{ steps.name.outputs.archive }}" . )
+          ls -la "${{ steps.name.outputs.archive }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kokoro-tts-server-macos-arm64
+          path: ${{ steps.name.outputs.archive }}
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.version
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.name.outputs.version }}
+          name: ${{ steps.name.outputs.version }}
+          files: ${{ steps.name.outputs.archive }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(steps.name.outputs.version, '-') }}

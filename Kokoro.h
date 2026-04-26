@@ -23,8 +23,13 @@ public:
     Kokoro(const std::string& model_path, const std::string& voices_path, const std::string& vocab_path = "dict/vocab.txt");
     ~Kokoro();
 
-    
+
     std::vector<float> get_voice_style(const std::string& name);
+
+    // Returns the list of voice names that were loaded from the voices file.
+    // Useful for HTTP API endpoints that expose available speakers.
+    std::vector<std::string> get_voice_names() const;
+    bool has_voice(const std::string& name) const;
 
     std::pair<std::vector<float>, int> create(
         const std::string& text,
