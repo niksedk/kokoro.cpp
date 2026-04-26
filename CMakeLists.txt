@@ -33,19 +33,23 @@ if (MSVC)
 endif()
 
 # ONNX Runtime Configuration
-# Priority 1: Check third_party/onnxruntime
-set(LOCAL_ONNX_PATH "${CMAKE_SOURCE_DIR}/third_party/onnxruntime")
-if(EXISTS "${LOCAL_ONNX_PATH}")
-    message(STATUS "Using local ONNX Runtime from: ${LOCAL_ONNX_PATH}")
-    set(ONNXRUNTIME_ROOT "${LOCAL_ONNX_PATH}")
-# Priority 2: User defined ONNXRUNTIME_ROOT
-elseif(NOT DEFINED ONNXRUNTIME_ROOT)
-    # Priority 3: Common system paths
-    if (APPLE)
+# Priority 1: User defined ONNXRUNTIME_ROOT (e.g. -DONNXRUNTIME_ROOT=... in CI)
+# Priority 2: Bundled third_party/onnxruntime (local dev convenience — only contains
+#             win-x64 + mac-arm64 zips, so it's wrong for Linux CI; only fall back to
+#             it when no explicit root was given).
+# Priority 3: Common system paths
+if(NOT DEFINED ONNXRUNTIME_ROOT OR ONNXRUNTIME_ROOT STREQUAL "")
+    set(LOCAL_ONNX_PATH "${CMAKE_SOURCE_DIR}/third_party/onnxruntime")
+    if(EXISTS "${LOCAL_ONNX_PATH}")
+        message(STATUS "Using local ONNX Runtime from: ${LOCAL_ONNX_PATH}")
+        set(ONNXRUNTIME_ROOT "${LOCAL_ONNX_PATH}")
+    elseif(APPLE)
         set(ONNXRUNTIME_ROOT "/opt/homebrew/opt/onnxruntime")
     else()
         set(ONNXRUNTIME_ROOT "/usr/local")
     endif()
+else()
+    message(STATUS "Using ONNX Runtime from -DONNXRUNTIME_ROOT: ${ONNXRUNTIME_ROOT}")
 endif()
 
 message(STATUS "Looking for ONNX Runtime in: ${ONNXRUNTIME_ROOT}")
