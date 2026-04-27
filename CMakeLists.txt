@@ -223,13 +223,15 @@ if (ONNXRUNTIME_LIB)
         endforeach()
     endif()
 
-    # Add rpath to find the dylib at runtime
+    # Add rpath to find the dylib at runtime.
+    # First entry covers the release zip layout (dylib next to the exe);
+    # second covers the local dev layout (dylib under third_party/...).
     if (APPLE)
-        set_target_properties(kokoro_demo         PROPERTIES INSTALL_RPATH "@loader_path/../third_party/onnxruntime/lib/mac_arm64")
-        set_target_properties(kokoro-tts-server   PROPERTIES INSTALL_RPATH "@loader_path/../third_party/onnxruntime/lib/mac_arm64")
+        set_target_properties(kokoro_demo         PROPERTIES INSTALL_RPATH "@loader_path;@loader_path/../third_party/onnxruntime/lib/mac_arm64")
+        set_target_properties(kokoro-tts-server   PROPERTIES INSTALL_RPATH "@loader_path;@loader_path/../third_party/onnxruntime/lib/mac_arm64")
     elseif (UNIX)
-        set_target_properties(kokoro_demo         PROPERTIES INSTALL_RPATH "$ORIGIN/../third_party/onnxruntime/lib/linux_x64")
-        set_target_properties(kokoro-tts-server   PROPERTIES INSTALL_RPATH "$ORIGIN/../third_party/onnxruntime/lib/linux_x64")
+        set_target_properties(kokoro_demo         PROPERTIES INSTALL_RPATH "$ORIGIN;$ORIGIN/../third_party/onnxruntime/lib/linux_x64")
+        set_target_properties(kokoro-tts-server   PROPERTIES INSTALL_RPATH "$ORIGIN;$ORIGIN/../third_party/onnxruntime/lib/linux_x64")
     endif()
 endif()
 
